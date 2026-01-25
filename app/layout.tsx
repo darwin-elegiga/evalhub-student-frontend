@@ -16,6 +16,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "EvalHub - Plataforma de Exámenes",
   description: "Sistema de evaluación en línea para estudiantes",
+  icons: {
+    icon: "/isotipo.png",
+    apple: "/isotipo.png",
+  },
 };
 
 export default function RootLayout({
