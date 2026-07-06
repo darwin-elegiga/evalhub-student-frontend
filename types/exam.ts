@@ -1,6 +1,6 @@
 // Assignment and Exam Status
 export type AssignmentStatus = 'pending' | 'in_progress' | 'submitted' | 'graded';
-export type QuestionType = 'multiple_choice' | 'numeric' | 'graph_click' | 'image_hotspot' | 'open_text';
+export type QuestionType = 'multiple_choice' | 'numeric' | 'graph_click' | 'image_hotspot' | 'open_text' | 'diagram';
 export type QuestionDifficulty = 'easy' | 'medium' | 'hard';
 
 // Fraud Event Types - matching backend enum
@@ -104,11 +104,28 @@ export interface ImageHotspotConfig {
   toleranceRadius: number;
 }
 
+// Pregunta de dibujo/marcado: el alumno dibuja con Excalidraw sobre una imagen base
+// (opcional) o sube una foto de su respuesta hecha a mano.
+export interface DiagramConfig {
+  referenceImageUrl?: string | null;
+  allowCanvas?: boolean;
+  allowUpload?: boolean;
+  canvasHeight?: number;
+}
+
+// Archivo de una respuesta de tipo diagram (imagen exportada y/o escena Excalidraw)
+export interface AnswerFile {
+  url: string;
+  kind: 'image' | 'scene';
+  mime?: string;
+}
+
 export type QuestionTypeConfig =
   | MultipleChoiceConfig
   | NumericConfig
   | GraphClickConfig
   | ImageHotspotConfig
+  | DiagramConfig
   | Record<string, unknown>;
 
 // Exam Configuration
@@ -164,6 +181,7 @@ export interface StudentAnswer {
   answerText?: string | null;
   answerNumeric?: number | null;
   answerPoint?: GraphPoint | null;
+  answerFiles?: AnswerFile[] | null;
   isCorrect?: boolean | null;
   score?: number | null;
   feedback?: string | null;

@@ -15,6 +15,7 @@ export const API_ENDPOINTS = {
   ASSIGNMENT_BY_TOKEN: (token: string) => `/assignments/token/${token}`,
   EXAM_START: '/assignments/start',
   EXAM_ANSWER: '/assignments/answer',
+  EXAM_ANSWER_UPLOAD: '/assignments/answer/upload',
   EXAM_SUBMIT: '/assignments/submit',
   FRAUD_EVENTS: '/fraud-events',
 };
@@ -56,6 +57,33 @@ export async function saveAnswer(data: AnswerRequest): Promise<AnswerResponse> {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+// Subir el dibujo de una respuesta de tipo diagram (imagen PNG + escena Excalidraw opcional).
+// Usa FormData (multipart) — no reutiliza apiFetch porque ese fuerza Content-Type: application/json.
+export async function uploadDiagramAnswer(data: {
+  assignmentId: string;
+  questionId: string;
+  image: Blob;
+  scene?: string;
+}): Promise<AnswerResponse> {
+  const form = new FormData();
+  form.append('image', data.image, 'diagram.png');
+  form.append('assignmentId', data.assignmentId);
+  form.append('questionId', data.questionId);
+  if (data.scene) form.append('scene', data.scene);
+
+  const response = await fetch(`${API_URL}${API_ENDPOINTS.EXAM_ANSWER_UPLOAD}`, {
+    method: 'POST',
+    body: form, // el navegador pone el Content-Type multipart con boundary
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: response.statusText }));
+    throw new Error(error.message || `Error ${response.status}`);
+  }
+
+  return response.json();
 }
 
 // Submit exam

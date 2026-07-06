@@ -20,6 +20,8 @@ import type {
   MultipleChoiceConfig,
   GraphClickConfig,
   NumericConfig,
+  DiagramConfig,
+  AnswerFile,
 } from '@/types/exam';
 import { saveAnswer, submitExam } from '@/lib/api';
 import { useFraudDetection } from '@/hooks/useFraudDetection';
@@ -52,6 +54,7 @@ import {
 
 import { QuestionContent, OptionContent } from '@/components/latex-preview';
 import { GraphEditor } from '@/components/graph-editor';
+import { DiagramCanvas } from '@/components/diagram-canvas';
 
 interface ExamTakingInterfaceProps {
   data: ExamTokenResponse;
@@ -63,6 +66,7 @@ type AnswerValue = {
   answerText?: string;
   answerNumeric?: number;
   answerPoint?: GraphPoint;
+  answerFiles?: AnswerFile[];
 };
 
 export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps) {
@@ -78,6 +82,7 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
         answerText: answer.answerText ?? undefined,
         answerNumeric: answer.answerNumeric ?? undefined,
         answerPoint: answer.answerPoint ?? undefined,
+        answerFiles: answer.answerFiles ?? undefined,
       };
     });
     return initial;
@@ -190,6 +195,15 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
     saveAnswerDebounced(questionId, { ...answers[questionId], ...value });
   };
 
+  // Los diagramas se suben aparte (multipart) desde DiagramCanvas; aquí solo
+  // actualizamos el estado local para marcar la pregunta como respondida.
+  const handleDiagramSaved = (questionId: string, files: AnswerFile[]) => {
+    setAnswers((prev) => ({
+      ...prev,
+      [questionId]: { ...prev[questionId], answerFiles: files },
+    }));
+  };
+
   const handleSubmit = async () => {
     if (isSubmitting) return;
 
@@ -222,7 +236,8 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
         answer.selectedOptionId ||
         answer.answerText ||
         answer.answerNumeric !== undefined ||
-        answer.answerPoint
+        answer.answerPoint ||
+        (answer.answerFiles && answer.answerFiles.length > 0)
       );
     }).length;
   };
@@ -234,7 +249,8 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
       answer.selectedOptionId ||
       answer.answerText ||
       answer.answerNumeric !== undefined ||
-      answer.answerPoint
+      answer.answerPoint ||
+      (answer.answerFiles && answer.answerFiles.length > 0)
     );
   };
 
@@ -438,8 +454,12 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
               <QuestionRenderer
                 question={currentQuestion}
                 answer={answers[currentQuestion.id]}
+                assignmentId={assignment.id}
                 onAnswerChange={(value) =>
                   handleAnswerChange(currentQuestion.id, value)
+                }
+                onDiagramSaved={(files) =>
+                  handleDiagramSaved(currentQuestion.id, files)
                 }
               />
             </div>
@@ -523,13 +543,17 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
 interface QuestionRendererProps {
   question: Question;
   answer?: AnswerValue;
+  assignmentId: string;
   onAnswerChange: (value: AnswerValue) => void;
+  onDiagramSaved: (files: AnswerFile[]) => void;
 }
 
 function QuestionRenderer({
   question,
   answer,
+  assignmentId,
   onAnswerChange,
+  onDiagramSaved,
 }: QuestionRendererProps) {
   return (
     <Card className="border-slate-200/80 shadow-sm bg-white/80 backdrop-blur-sm">
@@ -610,6 +634,27 @@ function QuestionRenderer({
               </p>
             )}
           </div>
+        )}
+
+        {question.questionType === 'diagram' && (
+          <DiagramCanvas
+            assignmentId={assignmentId}
+            questionId={question.id}
+            referenceImageUrl={
+              (question.typeConfig as DiagramConfig).referenceImageUrl ??
+              question.imageUrl ??
+              null
+            }
+            allowCanvas={
+              (question.typeConfig as DiagramConfig).allowCanvas ?? true
+            }
+            allowUpload={
+              (question.typeConfig as DiagramConfig).allowUpload ?? true
+            }
+            canvasHeight={(question.typeConfig as DiagramConfig).canvasHeight}
+            initialFiles={answer?.answerFiles ?? null}
+            onSaved={onDiagramSaved}
+          />
         )}
       </CardContent>
     </Card>
