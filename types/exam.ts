@@ -171,6 +171,10 @@ export interface Question {
   weight: number;
   difficulty?: QuestionDifficulty;
   imageUrl?: string;
+  // Agrupación en problemas con incisos (a, b, c)
+  groupKey?: string | null;
+  groupStatement?: string | null;
+  groupLabel?: string | null;
 }
 
 export interface StudentAnswer {

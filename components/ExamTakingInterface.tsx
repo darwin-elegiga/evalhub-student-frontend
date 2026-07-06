@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Image from 'next/image';
 import {
   Clock,
@@ -154,7 +154,27 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const currentQuestion = questions[currentQuestionIndex];
+  // Agrupa las preguntas en "problemas" por groupKey (incisos a, b, c...).
+  // Las preguntas sin groupKey forman su propio problema de un solo inciso.
+  const problems = useMemo(() => {
+    const result: {
+      key: string;
+      statement: string | null;
+      items: Question[];
+    }[] = [];
+    for (const q of questions) {
+      const key = q.groupKey || q.id;
+      const last = result[result.length - 1];
+      if (last && last.key === key) {
+        last.items.push(q);
+      } else {
+        result.push({ key, statement: q.groupStatement || null, items: [q] });
+      }
+    }
+    return result;
+  }, [questions]);
+
+  const currentProblem = problems[currentQuestionIndex];
 
   // Save answer with debounce
   const saveAnswerDebounced = useCallback(
@@ -222,7 +242,7 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
   };
 
   const goToQuestion = (index: number) => {
-    if (index >= 0 && index < questions.length) {
+    if (index >= 0 && index < problems.length) {
       setCurrentQuestionIndex(index);
       setShowMobileNav(false);
     }
@@ -252,6 +272,12 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
       answer.answerPoint ||
       (answer.answerFiles && answer.answerFiles.length > 0)
     );
+  };
+
+  // Un problema está "respondido" si todos sus incisos lo están.
+  const isProblemAnswered = (index: number): boolean => {
+    const p = problems[index];
+    return !!p && p.items.every((q) => isQuestionAnswered(q.id));
   };
 
   const answeredCount = getAnsweredCount();
@@ -298,7 +324,7 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
                     {exam.title}
                   </h1>
                   <p className="text-xs sm:text-sm text-slate-500">
-                    Pregunta {currentQuestionIndex + 1} de {questions.length}
+                    Problema {currentQuestionIndex + 1} de {problems.length}
                   </p>
                 </div>
               </div>
@@ -386,20 +412,20 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
               </div>
               <div className="p-4 overflow-y-auto max-h-[calc(70vh-60px)]">
                 <div className="grid grid-cols-5 gap-2">
-                  {questions.map((q, index) => (
+                  {problems.map((p, index) => (
                     <button
-                      key={q.id}
+                      key={p.key}
                       onClick={() => goToQuestion(index)}
                       className={cn(
                         'aspect-square rounded-xl text-sm font-medium transition-all flex items-center justify-center',
                         index === currentQuestionIndex
                           ? 'bg-slate-900 text-white shadow-sm'
-                          : isQuestionAnswered(q.id)
+                          : isProblemAnswered(index)
                           ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                           : 'bg-slate-100 text-slate-600 border border-slate-200'
                       )}
                     >
-                      {isQuestionAnswered(q.id) ? (
+                      {isProblemAnswered(index) ? (
                         <Check className="w-4 h-4" />
                       ) : (
                         index + 1
@@ -416,8 +442,8 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
           {/* Question navigation sidebar - Desktop only */}
           <aside className="hidden lg:block w-16 xl:w-20 bg-white border-r border-slate-200/80 p-2 overflow-y-auto">
             <div className="flex flex-col gap-1.5">
-              {questions.map((q, index) => (
-                <Tooltip key={q.id}>
+              {problems.map((p, index) => (
+                <Tooltip key={p.key}>
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => goToQuestion(index)}
@@ -425,12 +451,12 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
                         'w-full h-9 rounded-lg text-sm font-medium transition-all flex items-center justify-center',
                         index === currentQuestionIndex
                           ? 'bg-slate-900 text-white shadow-sm'
-                          : isQuestionAnswered(q.id)
+                          : isProblemAnswered(index)
                           ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                           : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                       )}
                     >
-                      {isQuestionAnswered(q.id) ? (
+                      {isProblemAnswered(index) ? (
                         <Check className="w-4 h-4" />
                       ) : (
                         index + 1
@@ -438,9 +464,9 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="right" className="text-xs">
-                    <p className="font-medium">Pregunta {index + 1}</p>
+                    <p className="font-medium">Problema {index + 1}</p>
                     <p className="text-slate-400">
-                      {isQuestionAnswered(q.id) ? 'Respondida' : 'Sin responder'}
+                      {isProblemAnswered(index) ? 'Respondido' : 'Sin responder'}
                     </p>
                   </TooltipContent>
                 </Tooltip>
@@ -451,17 +477,36 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
           {/* Main content */}
           <main className="flex-1 p-4 sm:p-6 pb-24 overflow-y-auto">
             <div className="max-w-3xl mx-auto">
-              <QuestionRenderer
-                question={currentQuestion}
-                answer={answers[currentQuestion.id]}
-                assignmentId={assignment.id}
-                onAnswerChange={(value) =>
-                  handleAnswerChange(currentQuestion.id, value)
-                }
-                onDiagramSaved={(files) =>
-                  handleDiagramSaved(currentQuestion.id, files)
-                }
-              />
+              {currentProblem && (
+                <div className="space-y-4">
+                  {currentProblem.statement && (
+                    <Card className="border-slate-200/80 shadow-sm bg-white/80 backdrop-blur-sm">
+                      <CardContent className="p-4 sm:p-6">
+                        <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+                          Problema {currentQuestionIndex + 1}
+                        </div>
+                        <QuestionContent
+                          html={currentProblem.statement}
+                          className="text-slate-800"
+                        />
+                      </CardContent>
+                    </Card>
+                  )}
+                  {currentProblem.items.map((q) => (
+                    <QuestionRenderer
+                      key={q.id}
+                      question={q}
+                      answer={answers[q.id]}
+                      assignmentId={assignment.id}
+                      label={q.groupLabel}
+                      onAnswerChange={(value) => handleAnswerChange(q.id, value)}
+                      onDiagramSaved={(files) =>
+                        handleDiagramSaved(q.id, files)
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           </main>
         </div>
@@ -480,13 +525,13 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
             </Button>
 
             <span className="text-sm text-slate-500 hidden sm:block">
-              {currentQuestionIndex + 1} / {questions.length}
+              {currentQuestionIndex + 1} / {problems.length}
             </span>
 
             <Button
               variant="ghost"
               onClick={() => goToQuestion(currentQuestionIndex + 1)}
-              disabled={currentQuestionIndex === questions.length - 1}
+              disabled={currentQuestionIndex === problems.length - 1}
               className="text-slate-600 h-11 px-4"
             >
               Siguiente
@@ -544,6 +589,7 @@ interface QuestionRendererProps {
   question: Question;
   answer?: AnswerValue;
   assignmentId: string;
+  label?: string | null;
   onAnswerChange: (value: AnswerValue) => void;
   onDiagramSaved: (files: AnswerFile[]) => void;
 }
@@ -552,6 +598,7 @@ function QuestionRenderer({
   question,
   answer,
   assignmentId,
+  label,
   onAnswerChange,
   onDiagramSaved,
 }: QuestionRendererProps) {
@@ -560,7 +607,14 @@ function QuestionRenderer({
       <CardContent className="p-4 sm:p-6">
         {/* Question header */}
         <div className="flex items-start justify-between gap-3 mb-4">
-          <h2 className="text-base sm:text-lg font-medium text-slate-900">{question.title}</h2>
+          <div className="flex items-baseline gap-2 min-w-0">
+            {label && (
+              <span className="text-base sm:text-lg font-semibold text-slate-900 shrink-0">
+                {label})
+              </span>
+            )}
+            <h2 className="text-base sm:text-lg font-medium text-slate-900">{question.title}</h2>
+          </div>
           <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md shrink-0">
             {question.weight} {question.weight === 1 ? 'pto' : 'ptos'}
           </span>
