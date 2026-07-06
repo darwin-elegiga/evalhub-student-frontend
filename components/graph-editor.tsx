@@ -370,8 +370,10 @@ export function GraphEditor({
             if (mode !== 'answer' || !isInteractive) return;
 
             const rect = e.currentTarget.getBoundingClientRect();
-            const x = Math.round(e.clientX - rect.left);
-            const y = Math.round(e.clientY - rect.top);
+            // Coordenadas normalizadas 0-1 (fracción de la imagen) para que la
+            // corrección sea independiente del tamaño en pantalla.
+            const x = Math.round(((e.clientX - rect.left) / rect.width) * 10000) / 10000;
+            const y = Math.round(((e.clientY - rect.top) / rect.height) * 10000) / 10000;
 
             onPointSelected?.({ x, y });
           }}
@@ -380,7 +382,7 @@ export function GraphEditor({
         {selectedPoint && (
           <div
             className="absolute w-5 h-5 bg-emerald-500 rounded-full border-2 border-white shadow-md transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
-            style={{ left: selectedPoint.x, top: selectedPoint.y }}
+            style={{ left: `${selectedPoint.x * 100}%`, top: `${selectedPoint.y * 100}%` }}
           />
         )}
       </div>

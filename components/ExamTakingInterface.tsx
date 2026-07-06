@@ -630,7 +630,7 @@ function QuestionRenderer({
             </div>
             {answer?.answerPoint && (
               <p className="text-sm text-slate-500 bg-slate-50 px-3 py-2 rounded-lg inline-block">
-                Punto seleccionado: ({answer.answerPoint.x.toFixed(1)}, {answer.answerPoint.y.toFixed(1)})
+                Punto marcado: ({(answer.answerPoint.x * 100).toFixed(0)}%, {(answer.answerPoint.y * 100).toFixed(0)}%)
               </p>
             )}
           </div>
