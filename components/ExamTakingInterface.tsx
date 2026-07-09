@@ -99,6 +99,7 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
   const [showMobileNav, setShowMobileNav] = useState(false);
 
   const debounceTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const hasAutoSubmitted = useRef(false);
 
   // Fraud detection
   const { warningCount, requestFullscreen } = useFraudDetection({
@@ -131,24 +132,45 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
     totalSeconds
   );
   const timerTone = getTimerTone(timeRemaining, totalSeconds);
+  const isTimerRunning = timeRemaining !== null && timeRemaining > 0;
+
+  const handleSubmit = useCallback(async () => {
+    if (isSubmitting) return;
+
+    setIsSubmitting(true);
+    setShowSubmitDialog(false);
+
+    try {
+      await submitExam(assignment.id);
+      onSubmit();
+    } catch (error) {
+      console.error('Error submitting exam:', error);
+      alert('Error al entregar el examen. Intenta de nuevo.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [assignment.id, isSubmitting, onSubmit]);
 
   // Timer countdown
   useEffect(() => {
-    if (timeRemaining === null) return;
+    if (!isTimerRunning) return;
 
     const timer = setInterval(() => {
       setTimeRemaining((prev) => {
-        if (prev === null || prev <= 1) {
-          clearInterval(timer);
-          handleSubmit();
-          return 0;
-        }
-        return prev - 1;
+        if (prev === null) return prev;
+        return Math.max(0, prev - 1);
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [timeRemaining !== null]);
+  }, [isTimerRunning]);
+
+  useEffect(() => {
+    if (timeRemaining !== 0 || hasAutoSubmitted.current) return;
+
+    hasAutoSubmitted.current = true;
+    void handleSubmit();
+  }, [handleSubmit, timeRemaining]);
 
   // Request fullscreen on mount
   useEffect(() => {
@@ -234,23 +256,6 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
       ...prev,
       [questionId]: { ...prev[questionId], answerFiles: files },
     }));
-  };
-
-  const handleSubmit = async () => {
-    if (isSubmitting) return;
-
-    setIsSubmitting(true);
-    setShowSubmitDialog(false);
-
-    try {
-      await submitExam(assignment.id);
-      onSubmit();
-    } catch (error) {
-      console.error('Error submitting exam:', error);
-      alert('Error al entregar el examen. Intenta de nuevo.');
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   const goToQuestion = (index: number) => {

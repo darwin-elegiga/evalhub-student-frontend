@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 
 declare global {
@@ -53,15 +53,8 @@ interface QuestionContentProps {
 
 export function QuestionContent({ html, className }: QuestionContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    setIsReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isReady) return;
-
     const typeset = async () => {
       if (containerRef.current && window.MathJax) {
         try {
@@ -73,7 +66,7 @@ export function QuestionContent({ html, className }: QuestionContentProps) {
       }
     };
     typeset();
-  }, [html, isReady]);
+  }, [html]);
 
   return (
     <div
@@ -101,7 +94,6 @@ interface OptionContentProps {
 
 export function OptionContent({ html, className }: OptionContentProps) {
   const containerRef = useRef<HTMLSpanElement>(null);
-  const [isReady, setIsReady] = useState(false);
 
   // Strip surrounding p tags for inline display
   const cleanHtml = html
@@ -110,12 +102,6 @@ export function OptionContent({ html, className }: OptionContentProps) {
     .trim();
 
   useEffect(() => {
-    setIsReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isReady) return;
-
     const typeset = async () => {
       if (containerRef.current && window.MathJax) {
         try {
@@ -127,7 +113,7 @@ export function OptionContent({ html, className }: OptionContentProps) {
       }
     };
     typeset();
-  }, [cleanHtml, isReady]);
+  }, [cleanHtml]);
 
   return (
     <span
