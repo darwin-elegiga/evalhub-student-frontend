@@ -23,16 +23,18 @@ export function GraphEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 600, height: 400 });
 
+  // Las preguntas con imagen de fondo no guardan ejes en su typeConfig, así que
+  // xRange/yRange llegan undefined; los defaults evitan que el cálculo de escalas
+  // de abajo (que corre antes del render con imagen) reviente.
   const {
-    xRange,
-    yRange,
+    xRange = [0, 10],
+    yRange = [0, 10],
     showGrid,
     gridStep,
     lines,
     functions,
     isInteractive,
     imageUrl,
-    graphType,
   } = config;
 
   // Calculate scale factors
@@ -359,7 +361,9 @@ export function GraphEditor({
     return () => resizeObserver.disconnect();
   }, []);
 
-  if (graphType === 'image' && imageUrl) {
+  // Basta con que haya imagen: image_hotspot no guarda graphType, y graph_click
+  // puede traer 'image' o 'custom_image'. El modo cartesiano guarda imageUrl: null.
+  if (imageUrl) {
     return (
       <div ref={containerRef} className={cn('relative bg-slate-50', className)}>
         <img
