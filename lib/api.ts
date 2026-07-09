@@ -10,6 +10,23 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://evalhub-backend.onrender.com';
 
+// Conserva el status HTTP para poder distinguir "no existe" (404) de un fallo del
+// servidor o de red, que se le presentan al estudiante de forma muy distinta.
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function toApiError(response: Response): Promise<ApiError> {
+  const body = await response.json().catch(() => ({ message: response.statusText }));
+  return new ApiError(body.message || `Error ${response.status}`, response.status);
+}
+
 // API Endpoints
 export const API_ENDPOINTS = {
   ASSIGNMENT_BY_TOKEN: (token: string) => `/assignments/token/${token}`,
@@ -31,8 +48,7 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
-    throw new Error(error.message || `Error ${response.status}`);
+    throw await toApiError(response);
   }
 
   return response.json();
@@ -79,8 +95,7 @@ export async function uploadDiagramAnswer(data: {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
-    throw new Error(error.message || `Error ${response.status}`);
+    throw await toApiError(response);
   }
 
   return response.json();

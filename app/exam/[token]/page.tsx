@@ -4,12 +4,30 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import type { ExamTokenResponse } from '@/types/exam';
-import { getExamByToken, startExam } from '@/lib/api';
+import { ApiError, getExamByToken, startExam } from '@/lib/api';
 import { ExamWelcome } from '@/components/ExamWelcome';
 import { ExamTakingInterface } from '@/components/ExamTakingInterface';
 import { ExamCompleted } from '@/components/ExamCompleted';
+import { NotFoundView } from '@/components/NotFoundView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+
+// Un 404 significa que el token no corresponde a ninguna asignación: reintentar no
+// arregla nada. Cualquier otro fallo (servidor caído, red) sí es transitorio.
+interface ExamError {
+  message: string;
+  isMissing: boolean;
+}
+
+function toExamError(err: unknown, fallback: string): ExamError {
+  if (err instanceof ApiError) {
+    return { message: err.message, isMissing: err.status === 404 };
+  }
+  return {
+    message: err instanceof Error ? err.message : fallback,
+    isMissing: false,
+  };
+}
 
 export default function ExamPage() {
   const params = useParams();
@@ -17,7 +35,7 @@ export default function ExamPage() {
 
   const [data, setData] = useState<ExamTokenResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ExamError | null>(null);
   const [isStarting, setIsStarting] = useState(false);
 
   const fetchExamData = useCallback(async () => {
@@ -29,7 +47,7 @@ export default function ExamPage() {
       const examData = await getExamByToken(token);
       setData(examData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error desconocido');
+      setError(toExamError(err, 'Error desconocido'));
     } finally {
       setLoading(false);
     }
@@ -54,7 +72,7 @@ export default function ExamPage() {
           : null
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al iniciar el examen');
+      setError(toExamError(err, 'Error al iniciar el examen'));
     } finally {
       setIsStarting(false);
     }
@@ -75,6 +93,16 @@ export default function ExamPage() {
     );
   }
 
+  if (error?.isMissing) {
+    return (
+      <NotFoundView
+        title="Examen no disponible"
+        description="Este examen ya no está disponible o el enlace no es válido."
+        helpText="Comprueba que abriste el enlace completo que te enviaron. Si el problema continúa, contacta con tu profesor o con el administrador del sistema."
+      />
+    );
+  }
+
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -84,7 +112,7 @@ export default function ExamPage() {
             <CardTitle>Error</CardTitle>
           </CardHeader>
           <CardContent className="text-center space-y-4">
-            <p className="text-muted-foreground">{error}</p>
+            <p className="text-muted-foreground">{error.message}</p>
             <Button onClick={fetchExamData} variant="outline">
               <RefreshCw className="w-4 h-4 mr-2" />
               Reintentar
@@ -97,9 +125,11 @@ export default function ExamPage() {
 
   if (!data) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <p className="text-lg text-muted-foreground">No se encontró el examen</p>
-      </div>
+      <NotFoundView
+        title="Examen no disponible"
+        description="Este examen ya no está disponible o el enlace no es válido."
+        helpText="Comprueba que abriste el enlace completo que te enviaron. Si el problema continúa, contacta con tu profesor o con el administrador del sistema."
+      />
     );
   }
 

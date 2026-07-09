@@ -124,3 +124,142 @@ html {
 .animate-in.slide-in-from-bottom {
   animation: slide-in-from-bottom 0.3s ease-out;
 }
+
+/* Relevo del skeleton a la imagen ya cargada (ver ImageWithSkeleton). Es una
+   animación y no una transición porque la imagen viene de display:none. */
+@keyframes image-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-image-fade-in {
+  animation: image-fade-in 0.35s ease-out;
+}
+
+/* Alarmas del temporizador del examen */
+@keyframes exam-alert-in {
+  from {
+    transform: translateY(-1rem) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes exam-flash {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes exam-icon-shake {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-12deg);
+  }
+  75% {
+    transform: rotate(12deg);
+  }
+}
+
+@keyframes exam-card-pulse-amber {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(245 158 11 / 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgb(245 158 11 / 0);
+  }
+}
+
+@keyframes exam-card-pulse-red {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(220 38 38 / 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgb(220 38 38 / 0);
+  }
+}
+
+@keyframes exam-timer-amber {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(245 158 11 / 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgb(245 158 11 / 0);
+  }
+}
+
+@keyframes exam-timer-red {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(220 38 38 / 0.65);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgb(220 38 38 / 0);
+    transform: scale(1.04);
+  }
+}
+
+.animate-exam-alert-in {
+  animation: exam-alert-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-exam-flash {
+  animation: exam-flash 0.55s ease-in-out 3;
+}
+
+.animate-exam-icon-shake {
+  animation: exam-icon-shake 0.4s ease-in-out 4;
+}
+
+.animate-exam-card-pulse-amber {
+  animation: exam-card-pulse-amber 1.6s ease-out 4;
+}
+
+.animate-exam-card-pulse-red {
+  animation: exam-card-pulse-red 1s ease-out 6;
+}
+
+.animate-exam-timer-amber {
+  animation: exam-timer-amber 1.8s ease-out infinite;
+}
+
+.animate-exam-timer-red {
+  animation: exam-timer-red 1.1s ease-out infinite;
+}
+
+.animate-exam-timer-urgent {
+  animation: exam-timer-red 0.55s ease-out infinite;
+}
+
+/* El parpadeo continuo es agresivo: lo desactivamos si el usuario lo pide.
+   El color y el texto del aviso siguen comunicando la urgencia. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-exam-alert-in,
+  .animate-exam-flash,
+  .animate-exam-icon-shake,
+  .animate-exam-card-pulse-amber,
+  .animate-exam-card-pulse-red,
+  .animate-exam-timer-amber,
+  .animate-exam-timer-red,
+  .animate-exam-timer-urgent {
+    animation: none;
+  }
+}

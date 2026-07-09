@@ -25,8 +25,12 @@ import type {
 } from '@/types/exam';
 import { saveAnswer, submitExam } from '@/lib/api';
 import { useFraudDetection } from '@/hooks/useFraudDetection';
+import { getTimerTone, useTimeAlerts } from '@/hooks/useTimeAlerts';
 import { cn } from '@/lib/utils';
 
+import { ExamTimeAlert, TIMER_TONE_STYLES } from '@/components/exam-time-alert';
+
+import { ImageWithSkeleton } from '@/components/image-with-skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -108,17 +112,25 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
     },
   });
 
+  const totalSeconds = (exam.durationMinutes ?? 60) * 60;
+
   // Calculate initial time on client only to avoid hydration mismatch
   useEffect(() => {
-    const duration = exam.durationMinutes ?? 60;
     if (!assignment.startedAt) {
-      setTimeRemaining(duration * 60);
+      setTimeRemaining(totalSeconds);
     } else {
       const startTime = new Date(assignment.startedAt).getTime();
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      setTimeRemaining(Math.max(0, duration * 60 - elapsed));
+      setTimeRemaining(Math.max(0, totalSeconds - elapsed));
     }
-  }, [exam.durationMinutes, assignment.startedAt]);
+  }, [totalSeconds, assignment.startedAt]);
+
+  // Avisos al cruzar la mitad del tiempo, el 10% restante y los 10/5/1 minutos.
+  const { activeAlert, dismiss: dismissTimeAlert } = useTimeAlerts(
+    timeRemaining,
+    totalSeconds
+  );
+  const timerTone = getTimerTone(timeRemaining, totalSeconds);
 
   // Timer countdown
   useEffect(() => {
@@ -245,6 +257,7 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
     if (index >= 0 && index < problems.length) {
       setCurrentQuestionIndex(index);
       setShowMobileNav(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -286,6 +299,15 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
   return (
     <TooltipProvider>
       <div className="min-h-dvh bg-slate-50 flex flex-col">
+        {/* Time alerts: no bloquean el examen, se cierran solas */}
+        {activeAlert && (
+          <ExamTimeAlert
+            alert={activeAlert}
+            pendingCount={questions.length - answeredCount}
+            onDismiss={dismissTimeAlert}
+          />
+        )}
+
         {/* Warning overlay */}
         {showWarning && (
           <div className="fixed inset-0 bg-red-600/95 z-50 flex items-center justify-center backdrop-blur-sm">
@@ -342,12 +364,8 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
                 {/* Timer */}
                 <div
                   className={cn(
-                    'flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg font-mono text-sm sm:text-lg font-medium',
-                    timeRemaining !== null && timeRemaining < 300
-                      ? 'bg-red-50 text-red-600'
-                      : timeRemaining !== null && timeRemaining < 600
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-slate-100 text-slate-700'
+                    'flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg font-mono text-sm sm:text-lg font-medium transition-colors',
+                    TIMER_TONE_STYLES[timerTone]
                   )}
                 >
                   <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -475,7 +493,9 @@ export function ExamTakingInterface({ data, onSubmit }: ExamTakingInterfaceProps
           </aside>
 
           {/* Main content */}
-          <main className="flex-1 p-4 sm:p-6 pb-24 overflow-y-auto">
+          {/* pb-32 deja aire suficiente bajo el footer fijo (~69px). Evitamos el
+              shorthand p-*: en sm+ sobreescribiría el padding inferior. */}
+          <main className="flex-1 px-4 sm:px-6 pt-4 sm:pt-6 pb-32">
             <div className="max-w-3xl mx-auto">
               {currentProblem && (
                 <div className="space-y-4">
@@ -615,9 +635,6 @@ function QuestionRenderer({
             )}
             <h2 className="text-base sm:text-lg font-medium text-slate-900">{question.title}</h2>
           </div>
-          <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md shrink-0">
-            {question.weight} {question.weight === 1 ? 'pto' : 'ptos'}
-          </span>
         </div>
 
         {/* Question content with LaTeX support */}
@@ -629,10 +646,11 @@ function QuestionRenderer({
         {/* Question image if exists */}
         {question.imageUrl && (
           <div className="mb-6">
-            <img
+            <ImageWithSkeleton
               src={question.imageUrl}
               alt="Imagen de la pregunta"
               className="max-w-full rounded-lg border border-slate-200"
+              skeletonClassName="h-56 w-full"
             />
           </div>
         )}

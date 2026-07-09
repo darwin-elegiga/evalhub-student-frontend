@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import type { GraphClickConfig, GraphPoint, GraphFunction } from '@/types/exam';
+import { ImageWithSkeleton } from '@/components/image-with-skeleton';
 import { cn } from '@/lib/utils';
 
 interface GraphEditorProps {
@@ -366,10 +367,11 @@ export function GraphEditor({
   if (imageUrl) {
     return (
       <div ref={containerRef} className={cn('relative bg-slate-50', className)}>
-        <img
+        <ImageWithSkeleton
           src={imageUrl}
           alt="Graph"
           className="w-full h-auto"
+          skeletonClassName="h-72 w-full rounded-none"
           onClick={(e) => {
             if (mode !== 'answer' || !isInteractive) return;
 

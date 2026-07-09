@@ -1,30 +1,58 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import dynamic from 'next/dynamic';
-import { Loader2, Check, Upload, AlertCircle } from 'lucide-react';
-import '@excalidraw/excalidraw/index.css';
+import {
+  Loader2,
+  Check,
+  Upload,
+  AlertCircle,
+  Maximize2,
+  Minimize2,
+  RotateCw,
+} from 'lucide-react';
 import { uploadDiagramAnswer } from '@/lib/api';
+import { cn } from '@/lib/utils';
+import {
+  beginManagedFullscreen,
+  endManagedFullscreen,
+} from '@/lib/fullscreen-guard';
+import { ImageWithSkeleton } from '@/components/image-with-skeleton';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { AnswerFile } from '@/types/exam';
 
-const Excalidraw = dynamic(
-  async () => (await import('@excalidraw/excalidraw')).Excalidraw,
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex h-[480px] items-center justify-center bg-slate-50 text-slate-400">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Cargando lienzo…
-      </div>
-    ),
-  }
-);
+const ExcalidrawBoard = dynamic(() => import('@/components/excalidraw-board'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-slate-50 text-slate-400">
+      <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Cargando lienzo…
+    </div>
+  ),
+});
 
-// La API imperativa de Excalidraw es un objeto opaco; lo tipamos laxo a propósito.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// La API imperativa de Excalidraw y sus objetos de escena son opacos aquí.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 type ExcalidrawApi = any;
+type SceneElement = any;
+type SceneSnapshot = {
+  elements: readonly SceneElement[];
+  appState: any;
+  files: any;
+};
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+type SceneStatus = 'loading' | 'restored' | 'blank';
+
+const REFERENCE_FILE_ID = 'reference-image';
+const SAVE_DEBOUNCE_MS = 1500;
+const MIN_CANVAS_HEIGHT = 280;
+const DEFAULT_CANVAS_HEIGHT = 480;
+
+// Las escenas viven en memoria mientras dura el examen: al cambiar de pregunta el
+// lienzo se desmonta y el autoguardado (con debounce) puede no haber llegado aún
+// al servidor, así que esta copia es la que garantiza no perder el dibujo.
+const sceneCache = new Map<string, SceneSnapshot>();
 
 interface DiagramCanvasProps {
   assignmentId: string;
@@ -56,23 +84,108 @@ function loadImageSize(src: string): Promise<{ width: number; height: number }> 
   });
 }
 
+// La figura base va bloqueada, así que todo lo desbloqueado lo puso el alumno.
+function hasStudentDrawing(elements: readonly SceneElement[]): boolean {
+  return elements.some((el) => !el.locked && !el.isDeleted);
+}
+
+function isReferenceElement(el: SceneElement): boolean {
+  return el.type === 'image' && el.fileId === REFERENCE_FILE_ID;
+}
+
+function sanitizeAppState(appState: any): any {
+  if (!appState) return {};
+  // `collaborators` es un Map y no sobrevive a la serialización ni al restore.
+  const { collaborators, ...rest } = appState;
+  void collaborators;
+  return rest;
+}
+
+type OrientationApi = {
+  lock?: (orientation: string) => Promise<void>;
+  unlock?: () => void;
+};
+
+function getOrientation(): OrientationApi | undefined {
+  return (window.screen as unknown as { orientation?: OrientationApi })
+    .orientation;
+}
+
 export function DiagramCanvas({
   assignmentId,
   questionId,
   referenceImageUrl,
   allowCanvas = true,
   allowUpload = true,
-  canvasHeight = 480,
+  canvasHeight = DEFAULT_CANVAS_HEIGHT,
   initialFiles,
   onSaved,
 }: DiagramCanvasProps) {
   const apiRef = useRef<ExcalidrawApi | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshFrame = useRef<number | null>(null);
   const referenceLoaded = useRef(false);
+  const lastVersion = useRef<number | null>(null);
+  const latestScene = useRef<SceneSnapshot | null>(null);
+  const savedOnce = useRef(Boolean(initialFiles?.length));
+  const nativeFullscreen = useRef(false);
+
   const [status, setStatus] = useState<SaveStatus>('idle');
+  const [apiReady, setApiReady] = useState(false);
+  const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
+  // Hasta que la escena inicial esté puesta tapamos el lienzo: updateScene()
+  // reemplaza los elementos, así que cualquier trazo previo se perdería.
+  const [canvasReady, setCanvasReady] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPortraitTouch, setIsPortraitTouch] = useState(false);
   const [uploadPreview, setUploadPreview] = useState<string | null>(
     () => initialFiles?.find((f) => f.kind === 'image')?.url ?? null,
   );
+
+  const cacheKey = `${assignmentId}:${questionId}`;
+  const savedSceneUrl = useMemo(
+    () => initialFiles?.find((f) => f.kind === 'scene')?.url ?? null,
+    [initialFiles],
+  );
+
+  // -------------------------------------------------------- escena inicial
+
+  const readSavedScene = useCallback(async (): Promise<SceneSnapshot | null> => {
+    const cached = sceneCache.get(cacheKey);
+    if (cached) return cached;
+    if (!savedSceneUrl) return null;
+    try {
+      const res = await fetch(savedSceneUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!Array.isArray(data?.elements) || data.elements.length === 0) {
+        return null;
+      }
+      return {
+        elements: data.elements,
+        appState: sanitizeAppState(data.appState),
+        files: data.files ?? {},
+      };
+    } catch (err) {
+      console.error('No se pudo restaurar el dibujo guardado:', err);
+      return null;
+    }
+  }, [cacheKey, savedSceneUrl]);
+
+  const initialData = useCallback(async () => {
+    const scene = await readSavedScene();
+    if (!scene) {
+      setSceneStatus('blank');
+      return null;
+    }
+    // La escena guardada ya lleva dentro la figura base bloqueada.
+    referenceLoaded.current = true;
+    const { getSceneVersion } = await import('@excalidraw/excalidraw');
+    lastVersion.current = getSceneVersion(scene.elements);
+    setSceneStatus('restored');
+    return { ...scene, scrollToContent: true };
+  }, [readSavedScene]);
 
   // Carga la imagen base como fondo bloqueado (una sola vez)
   const loadReference = useCallback(
@@ -89,10 +202,9 @@ export function DiagramCanvas({
         const { width, height } = await loadImageSize(dataURL);
         const maxW = 800;
         const scale = width > maxW ? maxW / width : 1;
-        const fileId = 'reference-image';
         api.addFiles([
           {
-            id: fileId,
+            id: REFERENCE_FILE_ID,
             dataURL,
             mimeType: blob.type || 'image/png',
             created: Date.now(),
@@ -101,7 +213,7 @@ export function DiagramCanvas({
         const skeleton = [
           {
             type: 'image',
-            fileId,
+            fileId: REFERENCE_FILE_ID,
             x: 0,
             y: 0,
             width: Math.round(width * scale),
@@ -109,45 +221,55 @@ export function DiagramCanvas({
             locked: true,
           },
         ];
-        const elements = convertToExcalidrawElements(
+        const reference = convertToExcalidrawElements(
           // fileId es un string branded en los tipos; en runtime acepta el string tal cual
           skeleton as unknown as Parameters<typeof convertToExcalidrawElements>[0],
         );
+        const elements = [...reference, ...api.getSceneElements()];
         api.updateScene({ elements });
         api.scrollToContent(elements, { fitToContent: true });
       } catch (err) {
         console.error('No se pudo cargar la imagen base:', err);
+      } finally {
+        setCanvasReady(true);
       }
     },
     [referenceImageUrl],
   );
 
-  const handleApiReady = useCallback(
-    (api: ExcalidrawApi) => {
-      apiRef.current = api;
-      void loadReference(api);
-    },
-    [loadReference],
-  );
+  const handleApiReady = useCallback((api: ExcalidrawApi) => {
+    apiRef.current = api;
+    setApiReady(true);
+  }, []);
+
+  // La figura base sólo se añade cuando no hubo escena que restaurar; si no,
+  // `updateScene()` borraría el dibujo recién recuperado.
+  useEffect(() => {
+    if (sceneStatus === 'restored') {
+      setCanvasReady(true);
+      return;
+    }
+    if (sceneStatus !== 'blank' || !apiReady || !apiRef.current) return;
+    if (!referenceImageUrl) {
+      setCanvasReady(true);
+      return;
+    }
+    void loadReference(apiRef.current);
+  }, [apiReady, sceneStatus, referenceImageUrl, loadReference]);
+
+  // ---------------------------------------------------------- autoguardado
 
   const persist = useCallback(async () => {
-    const api = apiRef.current;
-    if (!api) return;
-    const elements = api.getSceneElements();
-    // Solo guarda si el alumno dibujó algo (elementos no bloqueados = no son la base)
-    const hasDrawing = elements.some(
-      (el: { locked?: boolean; isDeleted?: boolean }) =>
-        !el.locked && !el.isDeleted,
-    );
-    if (!hasDrawing) return;
+    const snapshot = latestScene.current;
+    if (!snapshot) return;
+    const { elements, appState, files } = snapshot;
+    if (!hasStudentDrawing(elements) && !savedOnce.current) return;
 
     setStatus('saving');
     try {
       const { exportToBlob, serializeAsJSON } = await import(
         '@excalidraw/excalidraw'
       );
-      const files = api.getFiles();
-      const appState = api.getAppState();
       const blob = await exportToBlob({
         elements,
         files,
@@ -165,6 +287,7 @@ export function DiagramCanvas({
         image: blob,
         scene,
       });
+      savedOnce.current = true;
       setStatus('saved');
       onSaved?.((res.answer.answerFiles as AnswerFile[]) ?? []);
     } catch (err) {
@@ -173,17 +296,198 @@ export function DiagramCanvas({
     }
   }, [assignmentId, questionId, onSaved]);
 
-  const handleChange = useCallback(() => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void persist(), 1500);
+  // `onSaved` llega como lambda inline, así que `persist` cambia en cada render.
+  // El ref evita que el efecto de desmontaje dependa de su identidad.
+  const persistRef = useRef(persist);
+  useEffect(() => {
+    persistRef.current = persist;
   }, [persist]);
 
+  const handleChange = useCallback(
+    (
+      elements: readonly SceneElement[],
+      appState: any,
+      files: any,
+      sceneVersion: number,
+    ) => {
+      latestScene.current = { elements, appState, files };
+      sceneCache.set(cacheKey, {
+        elements,
+        appState: sanitizeAppState(appState),
+        files,
+      });
+
+      // Excalidraw también notifica desplazamientos y zoom: sin dibujo nuevo no
+      // hay nada que subir.
+      if (sceneVersion === lastVersion.current) return;
+      lastVersion.current = sceneVersion;
+      if (!hasStudentDrawing(elements) && !savedOnce.current) return;
+
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        saveTimer.current = null;
+        void persistRef.current();
+      }, SAVE_DEBOUNCE_MS);
+    },
+    [cacheKey],
+  );
+
+  const clearDrawing = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.updateScene({
+      elements: api.getSceneElements().filter(isReferenceElement),
+    });
+  }, []);
+
+  // Si el alumno cambia de pregunta antes de que salte el autoguardado, sube el
+  // último trazo desde el snapshot (la API ya no es fiable al desmontar).
   useEffect(
     () => () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (refreshFrame.current !== null) {
+        cancelAnimationFrame(refreshFrame.current);
+      }
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        void persistRef.current();
+      }
     },
     [],
   );
+
+  // ----------------------------------------- posición real del contenedor
+
+  // Excalidraw cachea la posición de su contenedor y sólo la recalcula ante
+  // resize o scroll. Cualquier otro reflujo (la imagen del enunciado al cargar,
+  // el LaTeX al renderizar, entrar en pantalla completa) la deja obsoleta, y
+  // entonces el trazo aparece desplazado respecto al puntero.
+  const refreshOffsets = useCallback(() => {
+    if (refreshFrame.current !== null) return;
+    refreshFrame.current = requestAnimationFrame(() => {
+      refreshFrame.current = null;
+      apiRef.current?.refresh();
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!allowCanvas) return;
+
+    const observer = new ResizeObserver(refreshOffsets);
+    observer.observe(document.body);
+    if (wrapperRef.current) observer.observe(wrapperRef.current);
+
+    const viewport = window.visualViewport;
+    window.addEventListener('scroll', refreshOffsets, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener('resize', refreshOffsets);
+    window.addEventListener('orientationchange', refreshOffsets);
+    viewport?.addEventListener('resize', refreshOffsets);
+    viewport?.addEventListener('scroll', refreshOffsets);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', refreshOffsets, { capture: true });
+      window.removeEventListener('resize', refreshOffsets);
+      window.removeEventListener('orientationchange', refreshOffsets);
+      viewport?.removeEventListener('resize', refreshOffsets);
+      viewport?.removeEventListener('scroll', refreshOffsets);
+    };
+  }, [allowCanvas, refreshOffsets]);
+
+  useEffect(() => {
+    refreshOffsets();
+  }, [isFullscreen, apiReady, refreshOffsets]);
+
+  // ------------------------------------------------------ pantalla completa
+
+  useEffect(() => {
+    const query = window.matchMedia(
+      '(orientation: portrait) and (pointer: coarse)',
+    );
+    const update = () => setIsPortraitTouch(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  const enterFullscreen = useCallback(async () => {
+    setIsFullscreen(true);
+
+    const el = wrapperRef.current;
+    if (el?.requestFullscreen) {
+      beginManagedFullscreen();
+      try {
+        await el.requestFullscreen({ navigationUI: 'hide' });
+        nativeFullscreen.current = true;
+      } catch {
+        // iPhone y algún navegador embebido: nos quedamos con la capa CSS.
+        endManagedFullscreen();
+      }
+    }
+
+    // La orientación sólo se puede bloquear desde pantalla completa nativa, e
+    // iOS no lo soporta en ningún caso: allí queda el aviso de girar el móvil.
+    if (nativeFullscreen.current && window.matchMedia('(pointer: coarse)').matches) {
+      try {
+        await getOrientation()?.lock?.('landscape');
+      } catch {
+        /* no soportado */
+      }
+    }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    getOrientation()?.unlock?.();
+    if (nativeFullscreen.current && document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+      } catch {
+        /* ya estaba fuera */
+      }
+    }
+    nativeFullscreen.current = false;
+    endManagedFullscreen();
+    setIsFullscreen(false);
+  }, []);
+
+  // Sincroniza cuando el alumno sale con Escape o con el gesto del navegador.
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!nativeFullscreen.current) return;
+      if (document.fullscreenElement === wrapperRef.current) return;
+      nativeFullscreen.current = false;
+      endManagedFullscreen();
+      getOrientation()?.unlock?.();
+      setIsFullscreen(false);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () =>
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (nativeFullscreen.current && document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => {});
+      }
+    },
+    [],
+  );
+
+  // En el respaldo CSS (iPhone) la página sigue viva detrás de la capa.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [isFullscreen]);
+
+  // ------------------------------------------------------------------ foto
 
   const handlePhotoUpload = useCallback(
     async (e: ChangeEvent<HTMLInputElement>) => {
@@ -197,6 +501,7 @@ export function DiagramCanvas({
           image: file,
         });
         setUploadPreview(URL.createObjectURL(file));
+        savedOnce.current = true;
         setStatus('saved');
         onSaved?.((res.answer.answerFiles as AnswerFile[]) ?? []);
       } catch (err) {
@@ -209,26 +514,83 @@ export function DiagramCanvas({
     [assignmentId, questionId, onSaved],
   );
 
+  const boxHeight = Math.max(canvasHeight, MIN_CANVAS_HEIGHT);
+
   return (
     <div className="space-y-3">
       {allowCanvas && (
         <div>
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-slate-600">
               {referenceImageUrl
                 ? 'Dibuja o marca sobre la figura'
                 : 'Dibuja tu respuesta'}
             </p>
-            <SaveIndicator status={status} />
+            <div className="flex items-center gap-3">
+              <SaveIndicator status={status} />
+              {!isFullscreen && (
+                <button
+                  type="button"
+                  onClick={() => void enterFullscreen()}
+                  className="flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  Pantalla completa
+                </button>
+              )}
+            </div>
           </div>
+
           <div
-            className="overflow-hidden rounded-lg border border-slate-200"
-            style={{ height: canvasHeight }}
+            ref={wrapperRef}
+            className={cn(
+              'flex w-full flex-col bg-white',
+              isFullscreen
+                ? 'fixed inset-0 z-[60]'
+                : 'overflow-hidden rounded-lg border border-slate-200',
+            )}
+            style={
+              isFullscreen
+                ? undefined
+                : {
+                    height: `clamp(${MIN_CANVAS_HEIGHT}px, 70dvh, ${boxHeight}px)`,
+                  }
+            }
           >
-            <Excalidraw
-              excalidrawAPI={handleApiReady}
-              onChange={handleChange}
-            />
+            {isFullscreen && (
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+                {isPortraitTouch ? (
+                  <span className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <RotateCw className="h-3.5 w-3.5 shrink-0" />
+                    Gira el móvil para dibujar con más espacio
+                  </span>
+                ) : (
+                  <SaveIndicator status={status} />
+                )}
+                <button
+                  type="button"
+                  onClick={() => void exitFullscreen()}
+                  className="flex shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  <Minimize2 className="h-3.5 w-3.5" />
+                  Salir
+                </button>
+              </div>
+            )}
+
+            <div className="relative min-h-0 flex-1">
+              <ExcalidrawBoard
+                excalidrawAPI={handleApiReady}
+                initialData={initialData}
+                onChange={handleChange}
+                onClearDrawing={clearDrawing}
+              />
+              {!canvasReady && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-white p-6">
+                  <Skeleton className="h-full w-full max-w-2xl" />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -250,11 +612,11 @@ export function DiagramCanvas({
             />
           </label>
           {uploadPreview && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            <ImageWithSkeleton
               src={uploadPreview}
               alt="Respuesta subida"
               className="mt-3 max-h-48 rounded-md border border-slate-200"
+              skeletonClassName="mt-3 h-48 w-full max-w-xs rounded-md"
             />
           )}
         </div>

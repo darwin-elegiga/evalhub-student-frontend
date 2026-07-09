@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { FraudEventType, EventSeverity, LocalFraudEvent } from '@/types/exam';
 import { reportFraudEvent } from '@/lib/api';
+import { isFullscreenExitManaged } from '@/lib/fullscreen-guard';
 
 interface UseFraudDetectionOptions {
   enabled: boolean;
@@ -70,9 +71,10 @@ export function useFraudDetection({
 
     // Fullscreen change
     const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        reportEvent('fullscreen_exit', 'warning');
-      }
+      if (document.fullscreenElement) return;
+      // El lienzo de diagramas entra y sale de pantalla completa a propósito.
+      if (isFullscreenExitManaged()) return;
+      reportEvent('fullscreen_exit', 'warning');
     };
 
     // Copy event
